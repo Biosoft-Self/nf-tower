@@ -1,51 +1,50 @@
-name: Tower Continuous Build
-on: [push]
+name: Docker
+
+# This workflow uses actions that are not certified by GitHub.
+# They are provided by a third-party and are governed by
+# separate terms of service, privacy policy, and support
+# documentation.
+
+on:
+  push:
+    branches: [ "*" ]
+    # Publish semver tags as releases.
+    tags: [ 'v*.*.*' ]
+    paths:
+      - 'Dockerfile'
+  pull_request:
+    branches: [ "*" ]
+    paths:
+      - 'Dockerfile'
 
 env:
+  # Use docker.io for Docker Hub if empty
   REGISTRY: ghcr.io
+  # github.repository as <account>/<repo>
   IMAGE_NAME: ${{ github.repository }}
-  TZ: Asia/Shanghai
+
 
 jobs:
   build:
-    name: Tower Build
+
     runs-on: ubuntu-latest
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
 
     steps:
-      - name: Environment
-        run: env | sort
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Checkout Repository
-        uses: actions/checkout@v3
+      - name: Install cosign
+        if: github.event_name != 'pull_request'
+        uses: sigstore/cosign-installer@59acb6260d9c0ba8f4a2f9d9b48431a222b68e20 #v3.5.0
         with:
-          fetch-depth: 1
-
-      - name: Setup Java
-        uses: actions/setup-java@v3
-        with:
-          distribution: 'zulu'
-          java-version: '8'
-          architecture: x64
-
-      - name: Run Tests
-        run: ./gradlew clean -x test
-
-      - name: Run Tests with MySQL
-        run: ./gradlew clean build -x test
-        env:
-          MICRONAUT_ENVIRONMENTS: mysql
-
-      - name: Build Backend
-        run: ./gradlew build -x test
-
-      - name: Build Frontend
-        run: docker build -t tower-web:latest tower-web
+          cosign-release: 'v2.2.4'
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@f95db51fddba0c2d1ec667646a06c2ce06100226 # v3.0.0
 
       - name: Log into registry ${{ env.REGISTRY }}
         if: github.event_name != 'pull_request'
@@ -55,38 +54,26 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract Docker metadata (tags and labels)
+      - name: Extract Docker metadata
         id: meta
-        uses: docker/metadata-action@v4
+        uses: docker/metadata-action@96383f45573cb7f253c731d3b3ab81c87ef81934 # v5.0.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
 
-      - name: Build and Push Backend Docker Image
-        id: build-and-push-backend
-        uses: docker/build-push-action@v5
+      - name: Build and push Docker image
+        id: build-and-push
+        uses: docker/build-push-action@0565240e2d4ab88bba5387d719585280857ece09 # v5.0.0
         with:
-          context: ./tower-backend
+          context: .
           push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}-backend
+          tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Install Cosign for Signing
-        run: |
-          curl -sSL https://github.com/sigstore/cosign/releases/download/v1.9.0/cosign-linux-amd64 -o /usr/local/bin/cosign
-          chmod +x /usr/local/bin/cosign
-
-      - name: Sign the Published Docker Backend Image
+      - name: Sign the published Docker image
         if: ${{ github.event_name != 'pull_request' }}
         env:
-          TAGS: ${{ steps.meta.outputs.tags }}-backend
-          DIGEST: ${{ steps.build-and-push-backend.outputs.digest }}
-        run: echo "${TAGS}" | xargs -I {} cosign sign --yes {}@${DIGEST}
-
-      - name: Sign the Published Docker Frontend Image
-        if: ${{ github.event_name != 'pull_request' }}
-        env:
-          TAGS: ${{ steps.meta.outputs.tags }}-frontend
-          DIGEST: ${{ steps.build-and-push-frontend.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+          DIGEST: ${{ steps.build-and-push.outputs.digest }}
         run: echo "${TAGS}" | xargs -I {} cosign sign --yes {}@${DIGEST}
